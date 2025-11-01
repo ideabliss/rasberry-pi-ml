@@ -1,0 +1,7 @@
+# Lightweight versions for 2GB RAM Raspberry Pi
+torch==1.13.1+cpu --index-url https://download.pytorch.org/whl/cpu
+torchvision==0.14.1+cpu --index-url https://download.pytorch.org/whl/cpu
+numpy==1.21.6
+opencv-python-headless==4.5.5.64
+requests==2.28.2
+Pillow==9.5.0

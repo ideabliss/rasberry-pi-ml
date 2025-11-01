@@ -1,0 +1,42 @@
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Model files (too large for git)
+*.pth
+*.pt
+*.pkl
+
+# Dataset (too large for git)
+farm_data/
+
+# Large files
+*.bin
+*.h5
+*.hdf5
+
+# Temporary files
+*.tmp
+*.log
+detection_*.jpg
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
