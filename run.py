@@ -26,6 +26,11 @@ class AnimalDetector:
         self.last_sent_time = 0
         self.min_interval = 5  # Minimum 5 seconds between messages
         
+        # Detection persistence tracking
+        self.detection_start_time = None
+        self.current_animal = None
+        self.detection_duration = 5  # Require 5 seconds of detection
+        
         # Load model checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
         
@@ -180,10 +185,51 @@ class AnimalDetector:
             print(f"❌ Telegram send error: {e}")
     
     def predict_webcam(self):
-        cap = cv2.VideoCapture(0)
+        # Try different camera indices and backends
+        cap = None
+        backends = [cv2.CAP_V4L2, cv2.CAP_GSTREAMER, cv2.CAP_ANY]
         
-        if not cap.isOpened():
-            print("❌ Error: Could not open webcam")
+        for backend in backends:
+            for i in range(3):
+                print(f"Trying camera {i} with backend {backend}...")
+                cap = cv2.VideoCapture(i, backend)
+                if cap.isOpened():
+                    # Set camera properties
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cap.set(cv2.CAP_PROP_FPS, 30)
+                    
+                    # Wait for camera to initialize
+                    import time
+                    time.sleep(2)
+                    
+                    # Try multiple frames
+                    for attempt in range(10):
+                        ret, test_frame = cap.read()
+                        if ret and test_frame is not None and test_frame.max() > 0:
+                            print(f"✅ Using camera {i} with backend {backend}")
+                            break
+                        time.sleep(0.1)
+                    
+                    if ret and test_frame is not None and test_frame.max() > 0:
+                        break
+                    else:
+                        cap.release()
+                        cap = None
+                else:
+                    if cap:
+                        cap.release()
+                        cap = None
+            
+            if cap and cap.isOpened():
+                break
+        
+        if not cap or not cap.isOpened():
+            print("❌ Error: Could not open any webcam")
+            print("💡 Fixes to try:")
+            print("   1. sudo usermod -a -G video $USER && logout/login")
+            print("   2. sudo modprobe uvcvideo")
+            print("   3. Check if camera is used by another app")
             return
         
         print("📹 Webcam started. Press 'q' to quit, 's' to save screenshot")
@@ -214,12 +260,25 @@ class AnimalDetector:
             else:
                 color = (0, 0, 255)  # Red - low confidence
             
-            # Send to Telegram if confidence > threshold
-            if conf > self.confidence_threshold and self.bot_token and self.chat_id:
-                current_time = time.time()
-                if current_time - self.last_sent_time > self.min_interval:
-                    self.send_to_telegram(frame, animal, conf)
-                    self.last_sent_time = current_time
+            # Track detection persistence
+            current_time = time.time()
+            if conf > self.confidence_threshold:
+                if self.current_animal == animal:
+                    # Same animal detected, check duration
+                    if self.detection_start_time and (current_time - self.detection_start_time) >= self.detection_duration:
+                        # Animal detected for 5+ seconds, send message
+                        if self.bot_token and self.chat_id and (current_time - self.last_sent_time) > self.min_interval:
+                            self.send_to_telegram(frame, animal, conf)
+                            self.last_sent_time = current_time
+                            self.detection_start_time = None  # Reset to avoid spam
+                else:
+                    # New animal detected, start timer
+                    self.current_animal = animal
+                    self.detection_start_time = current_time
+            else:
+                # Low confidence, reset detection
+                self.detection_start_time = None
+                self.current_animal = None
             
             # Display result with better formatting
             cv2.putText(frame, f'Animal: {animal}', (10, 30), 
@@ -227,14 +286,19 @@ class AnimalDetector:
             cv2.putText(frame, f'Confidence: {conf:.3f}', (10, 60), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             
-            # Show telegram status
+            # Show detection status
             if conf > self.confidence_threshold:
-                status = "📤 Sent to Telegram" if self.bot_token else "⚠️ Configure Telegram"
+                if self.detection_start_time:
+                    elapsed = current_time - self.detection_start_time
+                    remaining = max(0, self.detection_duration - elapsed)
+                    status = f"Detecting: {remaining:.1f}s left" if remaining > 0 else "📤 Ready to send"
+                else:
+                    status = "⚠️ Configure Telegram" if not self.bot_token else "Waiting..."
                 cv2.putText(frame, status, (10, 90), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             
-            cv2.putText(frame, "Press 'q' to quit, 's' to save", (10, frame.shape[0]-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, "Press 'q' to quit, 's' to save | 5s detection required", (10, frame.shape[0]-10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
             
             cv2.imshow('Animal Classification', frame)
             
