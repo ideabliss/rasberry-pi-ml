@@ -23,7 +23,7 @@ except ImportError:
 
 
 class AnimalDetector:
-    def __init__(self, model_path='best_animal_model.pth'):
+    def __init__(self, model_path='best_animal_model.pth', stream_url="http://localhost:8080/?action=stream"):
         # Device setup
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🚀 Loading model on: {self.device}")
@@ -37,6 +37,7 @@ class AnimalDetector:
         self.detection_start_time = None
         self.current_animal = None
         self.detection_duration = 5  # Seconds
+        self.stream_url = stream_url  # ✅ Use MJPG Streamer feed
 
         # Load model checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
@@ -120,20 +121,23 @@ class AnimalDetector:
         except Exception as e:
             print(f"❌ Telegram send error: {e}")
 
-    def predict_webcam(self):
-        """Run detection from webcam in headless mode"""
-        cap = cv2.VideoCapture(0)
+    def predict_stream(self):
+        """Run detection from MJPG Streamer feed"""
+        print(f"📹 Connecting to MJPG Streamer feed at: {self.stream_url}")
+        cap = cv2.VideoCapture(self.stream_url)
+
         if not cap.isOpened():
-            print("❌ Could not open webcam.")
+            print("❌ Could not open MJPG Streamer feed.")
             return
 
-        print("📹 Headless webcam detection started (Press Ctrl+C to stop)")
+        print("✅ Stream connected! Starting detection... (Press Ctrl+C to stop)")
 
         while True:
             ret, frame = cap.read()
-            if not ret:
-                print("❌ Frame capture failed.")
-                break
+            if not ret or frame is None:
+                print("⚠️ Frame not received, retrying...")
+                time.sleep(1)
+                continue
 
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             input_tensor = self.transform(frame_rgb).unsqueeze(0).to(self.device)
@@ -154,13 +158,11 @@ class AnimalDetector:
                     duration = now - self.detection_start_time
                     print(f"⏳ {animal} ({conf * 100:.1f}%) - visible for {duration:.1f}s")
 
-                    # If visible long enough, send alert
                     if duration >= self.detection_duration and (now - self.last_sent_time) > self.min_interval:
                         self.last_sent_time = now
                         self.detection_start_time = now
                         self.send_to_telegram(frame, animal, conf, duration)
 
-                        # Trigger relay alert if wild
                         if animal in self.wild_animals:
                             print(f"🚨 Wild Animal Detected: {animal}")
                             trigger_alert(duration=5)
@@ -179,8 +181,8 @@ class AnimalDetector:
 if __name__ == "__main__":
     try:
         detector = AnimalDetector()
-        print("✅ Model loaded successfully! Starting detection...")
-        detector.predict_webcam()
+        print("✅ Model loaded successfully! Starting MJPG Streamer detection...")
+        detector.predict_stream()
     except KeyboardInterrupt:
         print("\n🛑 Detection stopped by user.")
     finally:
