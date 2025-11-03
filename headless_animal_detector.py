@@ -23,7 +23,7 @@ except ImportError:
 
 
 class AnimalDetector:
-    def __init__(self, model_path='best_animal_model.pth', stream_url="http://10.228.82.17:8080/"):
+def __init__(self, model_path='best_animal_model.pth', stream_url="http://10.228.82.17:8080/?action=stream"):
         # Setup
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🚀 Loading model on: {self.device}")
@@ -124,7 +124,7 @@ class AnimalDetector:
     def predict_stream(self):
         """Run detection using MJPG Streamer feed"""
         print(f"📹 Connecting to MJPG Streamer at: {self.stream_url}")
-        cap = cv2.VideoCapture(self.stream_url)
+cap = cv2.VideoCapture(self.stream_url, cv2.CAP_FFMPEG)
 
         if not cap.isOpened():
             print("❌ Could not open MJPG Streamer feed.")
