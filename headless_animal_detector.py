@@ -124,7 +124,7 @@ class AnimalDetector:
     def predict_stream(self):
         """Run detection using MJPG Streamer feed"""
         print(f"📹 Connecting to MJPG Streamer at: {self.stream_url}")
-cap = cv2.VideoCapture(self.stream_url, cv2.CAP_FFMPEG)
+        cap = cv2.VideoCapture(self.stream_url, cv2.CAP_FFMPEG)
 
         if not cap.isOpened():
             print("❌ Could not open MJPG Streamer feed.")
