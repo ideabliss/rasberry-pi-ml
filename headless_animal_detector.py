@@ -7,42 +7,42 @@ import requests
 import time
 from datetime import datetime
 import os
-from relay_controller import trigger_alert, cleanup_relay  # ✅ Import from relay_controller.py
+from relay_controller import trigger_alert, cleanup_relay  # ✅ Relay control
 
-# Run headless (no GUI display)
+# Run headless (no GUI)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-# Import Telegram configuration
+# Telegram configuration
 try:
     from telegram_config import BOT_TOKEN, CHAT_ID, CONFIDENCE_THRESHOLD
 except ImportError:
     BOT_TOKEN = None
     CHAT_ID = None
     CONFIDENCE_THRESHOLD = 0.8
-    print("⚠️ Telegram config not found. Update telegram_config.py with your bot details.")
+    print("⚠️ Telegram config not found. Please create telegram_config.py with your bot details.")
 
 
 class AnimalDetector:
     def __init__(self, model_path='best_animal_model.pth', stream_url="http://localhost:8080/?action=stream"):
-        # Device setup
+        # Setup
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🚀 Loading model on: {self.device}")
 
-        # Telegram setup
+        # Telegram
         self.bot_token = BOT_TOKEN
         self.chat_id = CHAT_ID
         self.confidence_threshold = CONFIDENCE_THRESHOLD
         self.last_sent_time = 0
-        self.min_interval = 10  # Minimum time between alerts
+        self.min_interval = 10  # Minimum time (s) between alerts
         self.detection_start_time = None
         self.current_animal = None
         self.detection_duration = 5  # Seconds
-        self.stream_url = stream_url  # ✅ Use MJPG Streamer feed
+        self.stream_url = stream_url  # ✅ MJPG Streamer live feed
 
         # Load model checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
 
-        # Load class names
+        # Class names
         if 'class_names' in checkpoint:
             self.class_names = checkpoint['class_names']
         else:
@@ -85,7 +85,7 @@ class AnimalDetector:
 
         os.makedirs("detections", exist_ok=True)
 
-        # Wild animals (for relay trigger)
+        # Wild animal categories for alerts
         self.wild_animals = ["Elephant", "Tiger", "Wild Boar"]
 
     def send_to_telegram(self, frame, animal, confidence, duration):
@@ -98,7 +98,7 @@ class AnimalDetector:
             message = (
                 f"🐾 *Wild Animal Alert!*\n"
                 f"🔍 *Species:* {animal}\n"
-                f"📊 *Confidence:* {confidence*100:.1f}%\n"
+                f"📊 *Confidence:* {confidence * 100:.1f}%\n"
                 f"⏱ *Visible for:* {duration:.1f}s\n"
                 f"🕰 {datetime.now().strftime('%H:%M:%S')}"
             )
@@ -108,7 +108,7 @@ class AnimalDetector:
             print("=" * 40 + "\n")
 
             if not self.bot_token or not self.chat_id:
-                print("⚠️ Telegram not configured, skipping send.")
+                print("⚠️ Telegram not configured — skipping send.")
                 return
 
             url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
@@ -116,29 +116,30 @@ class AnimalDetector:
                 files = {'photo': photo}
                 data = {'chat_id': self.chat_id, 'caption': message, 'parse_mode': 'Markdown'}
                 requests.post(url, files=files, data=data, timeout=10)
-                print(f"📤 Sent {animal} detection to Telegram")
+                print(f"📤 Telegram alert sent for {animal}")
 
         except Exception as e:
             print(f"❌ Telegram send error: {e}")
 
     def predict_stream(self):
-        """Run detection from MJPG Streamer feed"""
-        print(f"📹 Connecting to MJPG Streamer feed at: {self.stream_url}")
+        """Run detection using MJPG Streamer feed"""
+        print(f"📹 Connecting to MJPG Streamer at: {self.stream_url}")
         cap = cv2.VideoCapture(self.stream_url)
 
         if not cap.isOpened():
             print("❌ Could not open MJPG Streamer feed.")
             return
 
-        print("✅ Stream connected! Starting detection... (Press Ctrl+C to stop)")
+        print("✅ Stream connected successfully! Starting detection... (Ctrl + C to stop)")
 
         while True:
             ret, frame = cap.read()
             if not ret or frame is None:
-                print("⚠️ Frame not received, retrying...")
+                print("⚠️ Frame not received — retrying...")
                 time.sleep(1)
                 continue
 
+            # Preprocess
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             input_tensor = self.transform(frame_rgb).unsqueeze(0).to(self.device)
 
@@ -152,12 +153,13 @@ class AnimalDetector:
             conf = confidence.item()
             now = time.time()
 
-            # High confidence detection
+            # High-confidence detection
             if conf > self.confidence_threshold:
                 if self.current_animal == animal:
                     duration = now - self.detection_start_time
                     print(f"⏳ {animal} ({conf * 100:.1f}%) - visible for {duration:.1f}s")
 
+                    # Trigger after duration
                     if duration >= self.detection_duration and (now - self.last_sent_time) > self.min_interval:
                         self.last_sent_time = now
                         self.detection_start_time = now
@@ -181,7 +183,7 @@ class AnimalDetector:
 if __name__ == "__main__":
     try:
         detector = AnimalDetector()
-        print("✅ Model loaded successfully! Starting MJPG Streamer detection...")
+        print("✅ Model loaded successfully! Starting live detection via MJPG Streamer...")
         detector.predict_stream()
     except KeyboardInterrupt:
         print("\n🛑 Detection stopped by user.")
