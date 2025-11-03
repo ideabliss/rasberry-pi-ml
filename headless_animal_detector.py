@@ -23,7 +23,7 @@ except ImportError:
 
 
 class AnimalDetector:
-def __init__(self, model_path='best_animal_model.pth', stream_url="http://10.228.82.17:8080/?action=stream"):
+    def __init__(self, model_path='best_animal_model.pth', stream_url="http://10.228.82.17:8080/?action=stream"):
         # Setup
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🚀 Loading model on: {self.device}")
