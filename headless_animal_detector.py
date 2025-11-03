@@ -7,6 +7,7 @@ import requests
 import time
 from datetime import datetime
 import os
+from relay_controller import trigger_relay, cleanup_relay  # ✅ NEW
 
 # ✅ Run headless (no GUI required)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -30,17 +31,15 @@ class AnimalDetector:
         self.chat_id = CHAT_ID
         self.confidence_threshold = CONFIDENCE_THRESHOLD
         self.last_sent_time = 0
-        self.min_interval = 5  # Minimum 5 seconds between messages
-
-        # Detection persistence tracking
+        self.min_interval = 5
         self.detection_start_time = None
         self.current_animal = None
-        self.detection_duration = 5  # Require 5 seconds of detection
+        self.detection_duration = 5
 
         # Load model checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
 
-        # Handle class names
+        # Classes
         if 'class_names' in checkpoint:
             self.class_names = checkpoint['class_names']
         else:
@@ -51,15 +50,9 @@ class AnimalDetector:
 
         print(f"📋 Classes: {self.class_names}")
 
-        if 'accuracy' in checkpoint:
-            print(f"🎯 Model accuracy: {checkpoint['accuracy']:.2%}")
-        else:
-            print("📊 Model accuracy: Not available")
-
         # Build model
         self.model = models.resnet50(weights=None)
         state_dict = checkpoint.get('model_state_dict', checkpoint)
-
         if 'fc.4.weight' in state_dict:
             self.model.fc = nn.Sequential(
                 nn.Dropout(0.5),
@@ -71,21 +64,11 @@ class AnimalDetector:
         else:
             self.model.fc = nn.Linear(self.model.fc.in_features, len(self.class_names))
 
-        try:
-            self.model.load_state_dict(state_dict)
-            print("✅ Model loaded successfully")
-        except Exception as e:
-            print(f"❌ Error loading model: {e}")
-            print("🔧 Trying ResNet34 fallback...")
-            self.model = models.resnet34(weights=None)
-            self.model.fc = nn.Linear(self.model.fc.in_features, len(self.class_names))
-            self.model.load_state_dict(state_dict)
-            print("✅ Model loaded with ResNet34 architecture")
-
+        self.model.load_state_dict(state_dict)
         self.model = self.model.to(self.device)
         self.model.eval()
 
-        # Preprocessing
+        # Image preprocessing
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((224, 224)),
@@ -96,17 +79,8 @@ class AnimalDetector:
 
         os.makedirs("detections", exist_ok=True)
 
-    def predict_image(self, image_path):
-        img = cv2.imread(image_path)
-        if img is None:
-            raise ValueError(f"Could not load image: {image_path}")
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        input_tensor = self.transform(img_rgb).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            outputs = self.model(input_tensor)
-            probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
-            confidence, predicted = torch.max(probabilities, 0)
-        return self.class_names[predicted.item()], confidence.item()
+        # Define wild animals
+        self.wild_animals = ["Elephant", "Tiger", "Wild Boar"]
 
     def send_to_telegram(self, frame, animal, confidence, duration):
         try:
@@ -115,16 +89,15 @@ class AnimalDetector:
             cv2.imwrite(filename, frame)
 
             message = (
-                f"🐾 *Animal Detected!*\n"
+                f"🐾 *Wild Animal Alert!*\n"
                 f"🔍 *Species:* {animal}\n"
                 f"📊 *Confidence:* {confidence*100:.1f}%\n"
-                f"⏱ *Time in frame:* {duration:.1f}s\n"
+                f"⏱ *Visible for:* {duration:.1f}s\n"
                 f"🕰 {datetime.now().strftime('%H:%M:%S')}"
             )
 
-            # Print message to terminal as well
             print("\n" + "="*40)
-            print(message.replace('*', ''))  # remove markdown for console clarity
+            print(message.replace('*', ''))
             print("="*40 + "\n")
 
             if not self.bot_token or not self.chat_id:
@@ -135,48 +108,23 @@ class AnimalDetector:
             with open(filename, 'rb') as photo:
                 files = {'photo': photo}
                 data = {'chat_id': self.chat_id, 'caption': message, 'parse_mode': 'Markdown'}
-                response = requests.post(url, files=files, data=data, timeout=10)
-                if response.status_code == 200:
-                    print(f"📤 Sent {animal} detection to Telegram")
-                else:
-                    print(f"❌ Telegram error: {response.status_code}")
+                requests.post(url, files=files, data=data, timeout=10)
+                print(f"📤 Sent {animal} detection to Telegram")
 
         except Exception as e:
             print(f"❌ Telegram send error: {e}")
 
     def predict_webcam(self):
-        # Try multiple camera backends
-        cap = None
-        for backend in [cv2.CAP_V4L2, cv2.CAP_GSTREAMER, cv2.CAP_ANY]:
-            for i in range(3):
-                print(f"Trying camera {i} with backend {backend}...")
-                cap = cv2.VideoCapture(i, backend)
-                if cap.isOpened():
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                    cap.set(cv2.CAP_PROP_FPS, 30)
-                    time.sleep(2)
-                    ret, test_frame = cap.read()
-                    if ret and test_frame is not None:
-                        print(f"✅ Using camera {i} with backend {backend}")
-                        break
-                    else:
-                        cap.release()
-                        cap = None
-            if cap and cap.isOpened():
-                break
-
-        if not cap or not cap.isOpened():
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
             print("❌ Could not open webcam.")
-            print("💡 Try: sudo modprobe uvcvideo OR connect a USB camera.")
             return
 
         print("📹 Headless webcam detection started (press Ctrl+C to stop)")
-
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("❌ Failed to read frame")
+                print("❌ Frame read failed.")
                 break
 
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -184,25 +132,30 @@ class AnimalDetector:
 
             with torch.no_grad():
                 outputs = self.model(input_tensor)
-                probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
-                confidence, predicted = torch.max(probabilities, 0)
+                probs = torch.nn.functional.softmax(outputs[0], dim=0)
+                confidence, predicted = torch.max(probs, 0)
 
             animal = self.class_names[predicted.item()]
             conf = confidence.item()
-            current_time = time.time()
+            now = time.time()
 
-            # Detection logic
             if conf > self.confidence_threshold:
                 if self.current_animal == animal:
-                    duration = current_time - self.detection_start_time
+                    duration = now - self.detection_start_time
                     print(f"⏳ {animal} ({conf*100:.1f}%) - in frame for {duration:.1f}s")
-                    if duration >= self.detection_duration and (current_time - self.last_sent_time) > self.min_interval:
+
+                    if duration >= self.detection_duration and (now - self.last_sent_time) > self.min_interval:
+                        self.last_sent_time = now
+                        self.detection_start_time = now
                         self.send_to_telegram(frame, animal, conf, duration)
-                        self.last_sent_time = current_time
-                        self.detection_start_time = current_time  # reset timer
+
+                        # ✅ Trigger relay if wild animal
+                        if animal in self.wild_animals:
+                            print(f"🚨 WILD ANIMAL DETECTED: {animal}")
+                            trigger_relay(5)
                 else:
                     self.current_animal = animal
-                    self.detection_start_time = current_time
+                    self.detection_start_time = now
             else:
                 self.current_animal = None
                 self.detection_start_time = None
@@ -210,25 +163,14 @@ class AnimalDetector:
             time.sleep(0.5)
 
         cap.release()
-        print("📹 Webcam closed")
 
 
 if __name__ == "__main__":
     try:
         detector = AnimalDetector()
         print("✅ Model loaded successfully!")
-
-        print("\n🎥 Starting headless webcam detection...")
-        if detector.bot_token and detector.chat_id:
-            print(f"🤖 Telegram bot enabled - will send photos when confidence > {detector.confidence_threshold:.0%}")
-        else:
-            print("⚠️ Telegram not configured - update telegram_config.py")
-
         detector.predict_webcam()
-
-    except FileNotFoundError:
-        print("❌ Model file 'best_animal_model.pth' not found!")
     except KeyboardInterrupt:
         print("\n🛑 Stopped by user.")
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    finally:
+        cleanup_relay()
