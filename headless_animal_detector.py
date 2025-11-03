@@ -7,11 +7,12 @@ import requests
 import time
 from datetime import datetime
 import os
-from relay_controller import trigger_alert, cleanup_relay  # ✅ Updated import
+from relay_controller import trigger_alert, cleanup_relay  # ✅ Import from relay_controller.py
 
-# ✅ Run headless (no GUI required)
+# Run headless (no GUI display)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+# Import Telegram configuration
 try:
     from telegram_config import BOT_TOKEN, CHAT_ID, CONFIDENCE_THRESHOLD
 except ImportError:
@@ -23,6 +24,7 @@ except ImportError:
 
 class AnimalDetector:
     def __init__(self, model_path='best_animal_model.pth'):
+        # Device setup
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🚀 Loading model on: {self.device}")
 
@@ -31,24 +33,26 @@ class AnimalDetector:
         self.chat_id = CHAT_ID
         self.confidence_threshold = CONFIDENCE_THRESHOLD
         self.last_sent_time = 0
-        self.min_interval = 5
+        self.min_interval = 10  # Minimum time between alerts
         self.detection_start_time = None
         self.current_animal = None
-        self.detection_duration = 5
+        self.detection_duration = 5  # Seconds
 
         # Load model checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
 
-        # Classes
+        # Load class names
         if 'class_names' in checkpoint:
             self.class_names = checkpoint['class_names']
         else:
-            self.class_names = ['Armadilles', 'Bear', 'Birds', 'Cow', 'Crocodile', 'Deer',
-                                'Elephant', 'Goat', 'Horse', 'Jaguar', 'Monkey', 'Rabbit',
-                                'Skunk', 'Tiger', 'Wild Boar']
+            self.class_names = [
+                'Armadilles', 'Bear', 'Birds', 'Cow', 'Crocodile', 'Deer',
+                'Elephant', 'Goat', 'Horse', 'Jaguar', 'Monkey', 'Rabbit',
+                'Skunk', 'Tiger', 'Wild Boar'
+            ]
             print("⚠️ Using default class names")
 
-        print(f"📋 Classes: {self.class_names}")
+        print(f"📋 Classes Loaded: {self.class_names}")
 
         # Build model
         self.model = models.resnet50(weights=None)
@@ -64,6 +68,7 @@ class AnimalDetector:
         else:
             self.model.fc = nn.Linear(self.model.fc.in_features, len(self.class_names))
 
+        # Load weights
         self.model.load_state_dict(state_dict)
         self.model = self.model.to(self.device)
         self.model.eval()
@@ -79,13 +84,14 @@ class AnimalDetector:
 
         os.makedirs("detections", exist_ok=True)
 
-        # Define wild animals for alert
+        # Wild animals (for relay trigger)
         self.wild_animals = ["Elephant", "Tiger", "Wild Boar"]
 
     def send_to_telegram(self, frame, animal, confidence, duration):
+        """Send detection alert to Telegram"""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"detections/detection_{animal}_{confidence:.3f}_{timestamp}.jpg"
+            filename = f"detections/{animal}_{timestamp}.jpg"
             cv2.imwrite(filename, frame)
 
             message = (
@@ -101,7 +107,7 @@ class AnimalDetector:
             print("=" * 40 + "\n")
 
             if not self.bot_token or not self.chat_id:
-                print("⚠️ Telegram not configured, skipping send")
+                print("⚠️ Telegram not configured, skipping send.")
                 return
 
             url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
@@ -115,21 +121,24 @@ class AnimalDetector:
             print(f"❌ Telegram send error: {e}")
 
     def predict_webcam(self):
+        """Run detection from webcam in headless mode"""
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
             print("❌ Could not open webcam.")
             return
 
-        print("📹 Headless webcam detection started (press Ctrl+C to stop)")
+        print("📹 Headless webcam detection started (Press Ctrl+C to stop)")
+
         while True:
             ret, frame = cap.read()
             if not ret:
-                print("❌ Frame read failed.")
+                print("❌ Frame capture failed.")
                 break
 
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             input_tensor = self.transform(frame_rgb).unsqueeze(0).to(self.device)
 
+            # Predict
             with torch.no_grad():
                 outputs = self.model(input_tensor)
                 probs = torch.nn.functional.softmax(outputs[0], dim=0)
@@ -139,19 +148,21 @@ class AnimalDetector:
             conf = confidence.item()
             now = time.time()
 
+            # High confidence detection
             if conf > self.confidence_threshold:
                 if self.current_animal == animal:
                     duration = now - self.detection_start_time
-                    print(f"⏳ {animal} ({conf * 100:.1f}%) - in frame for {duration:.1f}s")
+                    print(f"⏳ {animal} ({conf * 100:.1f}%) - visible for {duration:.1f}s")
 
+                    # If visible long enough, send alert
                     if duration >= self.detection_duration and (now - self.last_sent_time) > self.min_interval:
                         self.last_sent_time = now
                         self.detection_start_time = now
                         self.send_to_telegram(frame, animal, conf, duration)
 
-                        # ✅ Trigger alert for wild animals
+                        # Trigger relay alert if wild
                         if animal in self.wild_animals:
-                            print(f"🚨 WILD ANIMAL DETECTED: {animal}")
+                            print(f"🚨 Wild Animal Detected: {animal}")
                             trigger_alert(duration=5)
                 else:
                     self.current_animal = animal
@@ -168,9 +179,10 @@ class AnimalDetector:
 if __name__ == "__main__":
     try:
         detector = AnimalDetector()
-        print("✅ Model loaded successfully!")
+        print("✅ Model loaded successfully! Starting detection...")
         detector.predict_webcam()
     except KeyboardInterrupt:
-        print("\n🛑 Stopped by user.")
+        print("\n🛑 Detection stopped by user.")
     finally:
         cleanup_relay()
+        print("🔌 GPIO cleanup done. Exiting safely.")
