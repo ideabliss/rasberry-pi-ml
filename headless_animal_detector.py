@@ -40,7 +40,7 @@ class AnimalDetector:
         # Load model checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
 
-        # Handle different model file formats
+        # Handle class names
         if 'class_names' in checkpoint:
             self.class_names = checkpoint['class_names']
         else:
@@ -52,15 +52,14 @@ class AnimalDetector:
         print(f"📋 Classes: {self.class_names}")
 
         if 'accuracy' in checkpoint:
-            print(f"🎯 Model accuracy: {checkpoint['accuracy']:.4f}")
+            print(f"🎯 Model accuracy: {checkpoint['accuracy']:.2%}")
         else:
             print("📊 Model accuracy: Not available")
 
-        # Create model architecture
+        # Build model
         self.model = models.resnet50(weights=None)
         state_dict = checkpoint.get('model_state_dict', checkpoint)
 
-        # Adjust FC layer based on checkpoint
         if 'fc.4.weight' in state_dict:
             self.model.fc = nn.Sequential(
                 nn.Dropout(0.5),
@@ -95,7 +94,6 @@ class AnimalDetector:
                                  [0.229, 0.224, 0.225])
         ])
 
-        # Create output folder for saved detections
         os.makedirs("detections", exist_ok=True)
 
     def predict_image(self, image_path):
@@ -110,11 +108,24 @@ class AnimalDetector:
             confidence, predicted = torch.max(probabilities, 0)
         return self.class_names[predicted.item()], confidence.item()
 
-    def send_to_telegram(self, frame, animal, confidence):
+    def send_to_telegram(self, frame, animal, confidence, duration):
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"detections/detection_{animal}_{confidence:.3f}_{timestamp}.jpg"
             cv2.imwrite(filename, frame)
+
+            message = (
+                f"🐾 *Animal Detected!*\n"
+                f"🔍 *Species:* {animal}\n"
+                f"📊 *Confidence:* {confidence*100:.1f}%\n"
+                f"⏱ *Time in frame:* {duration:.1f}s\n"
+                f"🕰 {datetime.now().strftime('%H:%M:%S')}"
+            )
+
+            # Print message to terminal as well
+            print("\n" + "="*40)
+            print(message.replace('*', ''))  # remove markdown for console clarity
+            print("="*40 + "\n")
 
             if not self.bot_token or not self.chat_id:
                 print("⚠️ Telegram not configured, skipping send")
@@ -123,10 +134,7 @@ class AnimalDetector:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendPhoto"
             with open(filename, 'rb') as photo:
                 files = {'photo': photo}
-                data = {
-                    'chat_id': self.chat_id,
-                    'caption': f"🐾 Animal Detected!\n🔍 Species: {animal}\n📊 Confidence: {confidence:.1%}\n🕰 {datetime.now().strftime('%H:%M:%S')}"
-                }
+                data = {'chat_id': self.chat_id, 'caption': message, 'parse_mode': 'Markdown'}
                 response = requests.post(url, files=files, data=data, timeout=10)
                 if response.status_code == 200:
                     print(f"📤 Sent {animal} detection to Telegram")
@@ -137,7 +145,7 @@ class AnimalDetector:
             print(f"❌ Telegram send error: {e}")
 
     def predict_webcam(self):
-        # Try multiple camera sources
+        # Try multiple camera backends
         cap = None
         for backend in [cv2.CAP_V4L2, cv2.CAP_GSTREAMER, cv2.CAP_ANY]:
             for i in range(3):
@@ -183,42 +191,26 @@ class AnimalDetector:
             conf = confidence.item()
             current_time = time.time()
 
-            # Detection persistence logic
+            # Detection logic
             if conf > self.confidence_threshold:
                 if self.current_animal == animal:
-                    if self.detection_start_time and (current_time - self.detection_start_time) >= self.detection_duration:
-                        if (self.bot_token and self.chat_id) and (current_time - self.last_sent_time) > self.min_interval:
-                            self.send_to_telegram(frame, animal, conf)
-                            self.last_sent_time = current_time
-                            self.detection_start_time = None
-                    else:
-                        elapsed = current_time - (self.detection_start_time or current_time)
-                        remaining = max(0, self.detection_duration - elapsed)
-                        print(f"⏳ Detecting {animal} ({conf:.2f}) - {remaining:.1f}s remaining")
+                    duration = current_time - self.detection_start_time
+                    print(f"⏳ {animal} ({conf*100:.1f}%) - in frame for {duration:.1f}s")
+                    if duration >= self.detection_duration and (current_time - self.last_sent_time) > self.min_interval:
+                        self.send_to_telegram(frame, animal, conf, duration)
+                        self.last_sent_time = current_time
+                        self.detection_start_time = current_time  # reset timer
                 else:
                     self.current_animal = animal
                     self.detection_start_time = current_time
             else:
-                self.detection_start_time = None
                 self.current_animal = None
+                self.detection_start_time = None
 
-            # 🪶 Log detections in console
-            print(f"Detected: {animal} ({conf:.2f})")
-            time.sleep(0.5)  # small delay to prevent log flooding
+            time.sleep(0.5)
 
         cap.release()
         print("📹 Webcam closed")
-
-
-def test_image_prediction(detector, image_path):
-    try:
-        animal, confidence = detector.predict_image(image_path)
-        print(f"🔍 Prediction: {animal}")
-        print(f"📊 Confidence: {confidence:.4f}")
-        return animal, confidence
-    except Exception as e:
-        print(f"❌ Error predicting image: {e}")
-        return None, None
 
 
 if __name__ == "__main__":
@@ -236,7 +228,6 @@ if __name__ == "__main__":
 
     except FileNotFoundError:
         print("❌ Model file 'best_animal_model.pth' not found!")
-        print("🔧 Train your model first.")
     except KeyboardInterrupt:
         print("\n🛑 Stopped by user.")
     except Exception as e:
