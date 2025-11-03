@@ -7,7 +7,7 @@ import requests
 import time
 from datetime import datetime
 import os
-from relay_controller import trigger_relay, cleanup_relay  # ✅ NEW
+from relay_controller import trigger_alert, cleanup_relay  # ✅ Updated import
 
 # ✅ Run headless (no GUI required)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -79,7 +79,7 @@ class AnimalDetector:
 
         os.makedirs("detections", exist_ok=True)
 
-        # Define wild animals
+        # Define wild animals for alert
         self.wild_animals = ["Elephant", "Tiger", "Wild Boar"]
 
     def send_to_telegram(self, frame, animal, confidence, duration):
@@ -96,9 +96,9 @@ class AnimalDetector:
                 f"🕰 {datetime.now().strftime('%H:%M:%S')}"
             )
 
-            print("\n" + "="*40)
+            print("\n" + "=" * 40)
             print(message.replace('*', ''))
-            print("="*40 + "\n")
+            print("=" * 40 + "\n")
 
             if not self.bot_token or not self.chat_id:
                 print("⚠️ Telegram not configured, skipping send")
@@ -142,17 +142,17 @@ class AnimalDetector:
             if conf > self.confidence_threshold:
                 if self.current_animal == animal:
                     duration = now - self.detection_start_time
-                    print(f"⏳ {animal} ({conf*100:.1f}%) - in frame for {duration:.1f}s")
+                    print(f"⏳ {animal} ({conf * 100:.1f}%) - in frame for {duration:.1f}s")
 
                     if duration >= self.detection_duration and (now - self.last_sent_time) > self.min_interval:
                         self.last_sent_time = now
                         self.detection_start_time = now
                         self.send_to_telegram(frame, animal, conf, duration)
 
-                        # ✅ Trigger relay if wild animal
+                        # ✅ Trigger alert for wild animals
                         if animal in self.wild_animals:
                             print(f"🚨 WILD ANIMAL DETECTED: {animal}")
-                            trigger_relay(5)
+                            trigger_alert(duration=5)
                 else:
                     self.current_animal = animal
                     self.detection_start_time = now
